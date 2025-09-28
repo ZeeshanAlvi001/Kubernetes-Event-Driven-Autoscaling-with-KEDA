@@ -1,0 +1,65 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ns-backend-$(ExternalName)-$(moduleName)-$(Environment)
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: $(moduleName)-backend-secret
+  namespace: ns-backend-$(ExternalName)-$(moduleName)-$(Environment)
+type: Opaque
+stringData:
+  EVENT_HUB_CONNECTION_STRING: "$(#{eventhubConnectionString}#)"
+  AZURE_STORAGE_CONNECTION_STRING: "$(#{storageConnectionString}#)"
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: $(moduleName)-trigger-auth
+  namespace: ns-backend-$(ExternalName)-$(moduleName)-$(Environment)
+spec:
+  secretTargetRef:
+  - parameter: connection
+    name: $(moduleName)-backend-secret
+    key: EVENT_HUB_CONNECTION_STRING
+  - parameter: storageConnection
+    name: $(moduleName)-backend-secret
+    key: AZURE_STORAGE_CONNECTION_STRING
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: $(moduleName)-backend-scaler
+  namespace: ns-backend-$(ExternalName)-$(moduleName)-$(Environment)
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: $(moduleName)-backend
+  pollingInterval: 10   # check every 10s
+  initialCooldownPeriod: 0
+  cooldownPeriod: 60    # cooldown before scaling down
+  idleReplicaCount: $(idleHpaPods)
+  minReplicaCount: $(minHpaPods)
+  maxReplicaCount: $(maxHpaPods)
+  advanced:
+    restoreToOriginalReplicaCount: true
+    horizontalPodAutoscalerConfig:
+      name: keda-scaler
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 120
+          policies:
+          - type: Percent
+            value: 100
+            periodSeconds: 15
+  triggers:
+  - type: azure-eventhub
+    metadata:
+      eventHubName: "$(eventHubName)"
+      consumerGroup: "$(consumerGroup)"
+      blobContainer: "eventhub-checkpoints"
+      unprocessedEventThreshold: "$(unprocessedEventThreshold)"
+    authenticationRef:
+      name: $(moduleName)-trigger-auth
